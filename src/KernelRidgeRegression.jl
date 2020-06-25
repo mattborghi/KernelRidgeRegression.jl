@@ -2,20 +2,27 @@
 __precompile__()
 module KernelRidgeRegression
 
+using Reexport
+using Random, Distributed
+using LinearAlgebra
+
+@reexport using KernelFunctions
+
 export KRR,
     FastKRR,
     RandomFourierFeatures,
     TruncatedNewtonKRR,
     NystromKRR,
     SubsetRegressorsKRR,
-    fitPar
+    fitPar,
+    fit, predict
 
-import Base: show, showcompact, display
-import MLKernels
+import Base: show, display # showcompact
+# import MLKernels
 import StatsBase
 import StatsBase: fit, fitted, predict, nobs, predict!, RegressionModel, sample, weights
 
-abstract AbstractKRR{T} <: RegressionModel
+abstract type AbstractKRR{T} <: RegressionModel end
 
 function fit(::Type{AbstractKRR}) error("not implemented") end
 
