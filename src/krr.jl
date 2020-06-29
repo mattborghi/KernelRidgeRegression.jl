@@ -106,6 +106,7 @@ Divides the problem in `m` splits and calculates a separate Kernel Ridge Regress
 
 * `λ`: The regularization parameter.
 * `m`: The number of splits for the data.
+* `I`: The shuffled indices used later for reordering the predictions α * X.
 * `X`: A vector containing a data matrix for each split.
 * `α`: A vector containing the weights of the linear regressions in kernel space for each split,
        will be calculated by `fit`.
@@ -114,12 +115,14 @@ Divides the problem in `m` splits and calculates a separate Kernel Ridge Regress
 struct FastKRR{T <: AbstractFloat} <: AbstractKRR{T}
     λ::T
     m::Int
+    I::Vector{Int}
     X::Vector{Matrix{T}}
     α::Vector{Vector{T}}
     ϕ::KernelFunctions.Kernel
 
     function FastKRR(λ::T,
         m::Int,
+        I::Vector{Int},
         X::Vector{Matrix{T}},
         α::Vector{Vector{T}},
         ϕ::KernelFunctions.Kernel
@@ -138,7 +141,7 @@ struct FastKRR{T <: AbstractFloat} <: AbstractKRR{T}
         (nₘₐₓ - nₘᵢₙ) > 1 && @warn(
             "number of observations per block should not differ by more than one"
         )
-        new{T}(λ, m, X, α, ϕ)
+        new{T}(λ, m, I, X, α, ϕ)
     end
 end
 
@@ -149,6 +152,7 @@ function FastKRR(krrs::Union{Vector{KRR{T}},Tuple{KRR{T}}}) where {T <: Abstract
     X = map((i)->krrs[i].X, 1:m)
     α = map((i)->krrs[i].α, 1:m)
     ϕ = krrs[1].ϕ
+    I = krrs[1].I
 
     if m > 1
         for i in 2:m
@@ -158,7 +162,7 @@ function FastKRR(krrs::Union{Vector{KRR{T}},Tuple{KRR{T}}}) where {T <: Abstract
         end
     end
 
-    FastKRR{T}(λ, m, X, α, ϕ)
+    FastKRR{T}(λ, m, I, X, α, ϕ)
 end
 
 # equality hack for MLKernels
@@ -202,7 +206,7 @@ function fit(
         XX[i] = i_krr.X
         aa[i] = i_krr.α
     end
-    FastKRR(λ, m, XX, aa, ϕ)
+    FastKRR(λ, m, perm_idxs, XX, aa, ϕ)
 end
 
 # """
@@ -247,7 +251,7 @@ function fitPar(
     XX = map((i)->krrs[i].X, 1:m)
     aa = map((i)->krrs[i].α, 1:m)
 
-    FastKRR(λ, m, XX, aa, ϕ)
+    FastKRR(λ, m, perm_idxs, XX, aa, ϕ)
 end
 
 fitted(obj::FastKRR) = error("fitted is not defined for $(typeof(obj))")
@@ -257,8 +261,9 @@ function predict(fast_krr::FastKRR{T}, X::Matrix{T}) where {T <: AbstractFloat}
     d, n = size(X)
     y = zeros(T, n)
     K = Matrix{T}(undef, n, size(fast_krr.X[1], 2))
+    
     for i in 1:fast_krr.m
-
+        
         # The KRR.X[i] may be of different lengths
         if size(K, 2) != size(fast_krr.X[i], 2)
             K = Matrix{T}(undef, n, size(fast_krr.X[i], 2))
@@ -267,7 +272,7 @@ function predict(fast_krr::FastKRR{T}, X::Matrix{T}) where {T <: AbstractFloat}
         predict_and_add!(
             KRR(fast_krr.λ, fast_krr.X[i], fast_krr.α[i], fast_krr.ϕ),
             X, y, K
-    )
+        )
     end
 
     for i in 1:n
@@ -275,6 +280,23 @@ function predict(fast_krr::FastKRR{T}, X::Matrix{T}) where {T <: AbstractFloat}
     end
 
     return y
+end
+
+function predict_simplified(fast_krr::FastKRR{T}) where {T <: AbstractFloat}
+    # @assert fast_krr.m > 0
+    n = sum(i-> size(fast_krr.X[i], 2), range(1, length = fast_krr.m))
+    y = zeros(T, n)
+    cont = 1
+    @views for row in range(1, length = fast_krr.m)
+        for elem in range(1, length = size(fast_krr.X[row], 2))
+            @inbounds y[cont] = fast_krr.X[row][elem] * fast_krr.α[row][elem]
+            cont += 1
+        end 
+        # @inbounds y[cont:cont + size(fast_krr.X[row], 2) - 1] = fast_krr.X[row]' .* fast_krr.α[row]
+        # cont += size(fast_krr.X[row], 2)
+    end
+    return view(y,fast_krr.I)
+    # return @inbounds view(vcat(map(i-> fast_krr.X[i]' .*  fast_krr.α[i], range(1, length = fast_krr.m))...), fast_krr.I)
 end
 
 function showcompact(io::IO, x::FastKRR)
@@ -301,70 +323,69 @@ end
 #        will be calculated by `fit`.
 # * `ϕ`: Kernel approximation function function.
 # """
-# type RandomFourierFeatures{T <: AbstractFloat, S <: Number} <: AbstractKRR{T}
-#     λ :: T
-#     K :: Int
-#     σ :: T
-#     W :: Matrix{T}
-#     α :: Vector{S}
-#     ϕ :: Function
+struct RandomFourierFeatures{T <: AbstractFloat,S <: Number} <: AbstractKRR{T}
+    λ::T
+    K::Int
+    σ::T
+    W::Matrix{T}
+    α::Vector{S}
+    ϕ::Function
 
-#     function RandomFourierFeatures(λ, K, σ, W, α, ϕ)
-#         @assert λ >= zero(T)
-#         @assert K > zero(Int)
-#         @assert size(W, 2) == K
-#         @assert σ > zero(σ)
-#         new(λ, K, σ, W, α, ϕ)
-#     end
-# end
+    # function RandomFourierFeatures(λ, K, σ, W, α, ϕ)
+    #     @assert λ >= zero(T)
+    #     @assert K > zero(Int)
+    #     @assert size(W, 2) == K
+    #     @assert σ > zero(σ)
+    #     new(λ, K, σ, W, α, ϕ)
+    # end
+    function RandomFourierFeatures(
+        λ::T,
+        K::Int,
+        σ::T,
+        W::Matrix{T},
+        α::Vector{S},
+        ϕ::Function
+    ) where {T <: AbstractFloat,S <: Number}
+        new{T,S}(λ, K, σ, W, α, ϕ)
+    end
+end
 
-# function RandomFourierFeatures{T <: AbstractFloat, S <: Number}(
-#     λ :: T,
-#     K :: Int,
-#     σ :: T,
-#     W :: Matrix{T},
-#     α :: Vector{S},
-#     ϕ :: Function
-# )
-#     RandomFourierFeatures{T, S}(λ, K, σ, W, α, ϕ)
-# end
+function fit(
+      :: Type{RandomFourierFeatures},
+    X::Matrix{T},
+    y::Vector{T},
+    λ::T,
+    K::Int,
+    σ::T,
+    ϕ::Function=(X, W)->exp(X' * W * 1im)
+) where {T <: AbstractFloat}
+    d, n = size(X)
+    W = randn(d, K) / σ
+    Z = ϕ(X, W) / sqrt(K) # Kxd matrix, the normalization can probably be dropped
+    Z2 = Z' * Z
+    for i in 1:K
+        @inbounds Z2[i, i] += λ * K
+    end
+    α = cholesky!(Z2) \ (Z' * y)
+    RandomFourierFeatures(λ, K, σ, W, α, ϕ)
+end
 
-# function fit{T<:AbstractFloat}(
-#       :: Type{RandomFourierFeatures},
-#     X :: Matrix{T},
-#     y :: Vector{T},
-#     λ :: T,
-#     K :: Int,
-#     σ :: T,
-#     ϕ :: Function = (X, W) -> exp(X' * W * 1im)
-# )
-#     d, n = size(X)
-#     W = randn(d, K) / σ
-#     Z = ϕ(X, W) / sqrt(K) # Kxd matrix, the normalization can probably be dropped
-#     Z2 = Z' * Z
-#     for i in 1:K
-#         @inbounds Z2[i, i] += λ * K
-#     end
-#     α = cholfact(Z2) \ (Z' * y)
-#     RandomFourierFeatures(λ, K, σ, W, α, ϕ)
-# end
+function predict(RFF::RandomFourierFeatures, X::Matrix{T}) where {T <: AbstractFloat}
+    Z = RFF.ϕ(X, RFF.W) / sqrt(RFF.K)
+    real(Z * RFF.α)
+end
 
-# function predict{T <: AbstractFloat}(RFF::RandomFourierFeatures, X::Matrix{T})
-#     Z = RFF.ϕ(X, RFF.W) / sqrt(RFF.K)
-#     real(Z * RFF.α)
-# end
+function showcompact(io::IO, x::RandomFourierFeatures)
+    show(io, typeof(x))
+end
 
-# function showcompact(io::IO, x::RandomFourierFeatures)
-#     show(io, typeof(x))
-# end
-
-# function show(io::IO, x::RandomFourierFeatures)
-#     showcompact(io, x)
-#     println(io, ":\n    λ = ", x.λ)
-#     println(io,   ":    σ = ", x.σ)
-#     println(io,   ":    K = ", x.K)
-#     print(io,      "    ϕ = "); show(io, x.ϕ)
-# end
+function show(io::IO, x::RandomFourierFeatures)
+    showcompact(io, x)
+    println(io, ":\n    λ = ", x.λ)
+    println(io,   ":    σ = ", x.σ)
+    println(io,   ":    K = ", x.K)
+    print(io,      "    ϕ = "); show(io, x.ϕ)
+end
 
 # """
 # Truncated Newton Kernel Ridge Regression

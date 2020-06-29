@@ -3,7 +3,8 @@ __precompile__()
 module KernelRidgeRegression
 
 using Reexport
-using Random, Distributed
+using Random
+using Distributed
 using LinearAlgebra
 
 @reexport using KernelFunctions
