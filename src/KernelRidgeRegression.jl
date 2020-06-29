@@ -16,7 +16,7 @@ export KRR,
     NystromKRR,
     SubsetRegressorsKRR,
     fitPar,
-    fit, predict
+    fit, predict, predict_simplified
 
 import Base: show, display # showcompact
 # import MLKernels
