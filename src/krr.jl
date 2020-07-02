@@ -312,7 +312,7 @@ function predict(fast_krr::FastKRR{T}, X::Matrix{T}) where {T <: AbstractFloat}
 
     return y
 end
-using Plots
+# using Plots
 function fit_and_predict(   
      :: Type{FastKRR},
     X::Matrix{T},
@@ -331,7 +331,7 @@ function fit_and_predict(
     # n_clusters = 5
     k2 = Clustering.kmeans(X, m)
     perm_idxs  = assignments(k2)
-    scatter(X[1,:], X[2,:], marker_z=k2.assignments, color=:lightrainbow, legend=false) |> display
+    # scatter(X[1,:], X[2,:], marker_z=k2.assignments, color=:lightrainbow, legend=false) |> display
     # perm_idxs  = shuffle(1:n)
     # blocksizes = make_blocks(n, m)
 
