@@ -805,7 +805,9 @@ function fit_and_predict(
     blocks = make_blocks(n, nblocks)
     Knm = Matrix{T}(undef, blocks[1], size(X, 2))
     @views for i in 1:nblocks
-        # TODO: Change Knm if blocks[i] not equal to Knm size 2
+        if blocks[i] != size(Kmn, 1)
+            Knm = Matrix{T}(undef, blocks[i], size(X, 2))
+        end
         KernelFunctions.kernelmatrix!(Knm,
             ϕ, X[:,cont:cont + blocks[i] - 1], X, obsdim=2)
         ŷ[cont:cont+blocks[i]-1] = Knm * α
