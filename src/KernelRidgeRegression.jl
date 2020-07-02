@@ -6,6 +6,7 @@ using Reexport
 using Random
 using Distributed
 using LinearAlgebra
+using Clustering
 
 @reexport using KernelFunctions
 
@@ -16,7 +17,7 @@ export KRR,
     NystromKRR,
     SubsetRegressorsKRR,
     fitPar,
-    fit, predict, predict_simplified
+    fit, predict, fit_and_predict
 
 import Base: show, display # showcompact
 # import MLKernels

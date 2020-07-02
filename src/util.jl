@@ -41,3 +41,22 @@ function truncated_newton!(A::Matrix{T}, b::Vector{T},
     end
     return x
 end
+
+function unmerge_values(data::Vector{T}, assignments::Vector{Int}, n_clusters::Int) where {T <: AbstractFloat}
+    ŷ = similar(data)
+    elems = map(i -> sum(assignments .== i), 1:n_clusters)
+    Idxs = ones(Int64, n_clusters)
+    @views @inbounds for i in 1:n_clusters - 1
+      # Loop on previous 
+        Idxs[i + 1] = sum(elems[1:i]) + 1
+    end
+    @views @inbounds for i in 1:length(data)
+        current_cluster = assignments[i]
+        search_index = Idxs[current_cluster]
+        
+        ŷ[i] = data[search_index]
+      # Update corresponding cluster 
+        Idxs[current_cluster] += 1  
+    end
+    return ŷ
+end

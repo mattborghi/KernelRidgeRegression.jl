@@ -190,7 +190,7 @@ function fit(
     m > n^0.45 && @warn("m > n^0.45 = $(n^0.45), above empirical limit")
 
     XX = Vector{Matrix{T}}(undef, m)
-    aa = Vector{Vector{T}}(undef, m)
+    αα = Vector{Vector{T}}(undef, m)
 
     perm_idxs  = shuffle(1:n)
     blocksizes = make_blocks(n, m)
@@ -204,10 +204,41 @@ function fit(
         i_krr  = fit(KRR, X[:, i_idxs], y[i_idxs], λ, ϕ)
 
         XX[i] = i_krr.X
-        aa[i] = i_krr.α
+        αα[i] = i_krr.α
     end
-    FastKRR(λ, m, perm_idxs, XX, aa, ϕ)
+    FastKRR(λ, m, perm_idxs, XX, αα, ϕ)
 end
+
+# function fit(
+#     :: Type{FastKRR},
+#   X::Matrix{T},
+#   y::Vector{T},
+#   λ::T,
+#   m::Int,
+#   ϕ::KernelFunctions.Kernel,
+#   true
+#   ) where {T <: AbstractFloat}
+#   d, n = size(X)
+#   # Those are the limits for polynomial kernels,
+#   # the gaussian kernel needs a little bit less blocks
+#   m > n^0.33 && @warn("m > n^1/3 = $(n^(1 / 3)), above theoretical limit")
+#   m > n^0.45 && @warn("m > n^0.45 = $(n^0.45), above empirical limit")
+
+#   XX = Vector{Matrix{T}}(undef, m)
+#   αα = Vector{Vector{T}}(undef, m)
+
+#   k2 = Clustering.kmeans(X, 5)
+#   perm_idxs  = assignments(k2)
+
+#   for i in 1:m
+#       cluster = assignments(k2) .== m
+#       i_krr  = fit(KRR, X[:, cluster], y[cluster], λ, ϕ)
+        
+#       XX[i] = i_krr.X
+#       αα[i] = i_krr.α
+#   end
+#   FastKRR(λ, m, perm_idxs, XX, αα, ϕ)
+# end
 
 # """
 # Fit a FastKRR in parallel
@@ -249,9 +280,9 @@ function fitPar(
     ), 1:m)
 
     XX = map((i) -> krrs[i].X, 1:m)
-    aa = map((i) -> krrs[i].α, 1:m)
+    αα = map((i) -> krrs[i].α, 1:m)
 
-    FastKRR(λ, m, perm_idxs, XX, aa, ϕ)
+    FastKRR(λ, m, perm_idxs, XX, αα, ϕ)
 end
 
 fitted(obj::FastKRR) = error("fitted is not defined for $(typeof(obj))")
@@ -281,22 +312,66 @@ function predict(fast_krr::FastKRR{T}, X::Matrix{T}) where {T <: AbstractFloat}
 
     return y
 end
+using Plots
+function fit_and_predict(   
+     :: Type{FastKRR},
+    X::Matrix{T},
+    y::Vector{T},
+    λ::T,
+    m::Int,
+    ϕ::KernelFunctions.Kernel) where {T <: AbstractFloat}
+    d, n = size(X)
+    # Those are the limits for polynomial kernels,
+    # the gaussian kernel needs a little bit less blocks
+    m > n^0.33 && @warn("m > n^1/3 = $(n^(1 / 3)), above theoretical limit")
+    m > n^0.45 && @warn("m > n^0.45 = $(n^0.45), above empirical limit")
 
-function predict_simplified(fast_krr::FastKRR{T}) where {T <: AbstractFloat}
-    # @assert fast_krr.m > 0
-    n = sum(i -> size(fast_krr.X[i], 2), range(1, length=fast_krr.m))
-    y = zeros(T, n)
-    cont = 1
-    @views for row in range(1, length=fast_krr.m)
-        for elem in range(1, length=size(fast_krr.X[row], 2))
-            @inbounds y[cont] = fast_krr.X[row][elem] * fast_krr.α[row][elem]
-            cont += 1
-        end 
-        # @inbounds y[cont:cont + size(fast_krr.X[row], 2) - 1] = fast_krr.X[row]' .* fast_krr.α[row]
-        # cont += size(fast_krr.X[row], 2)
+    # XX = Vector{Matrix{T}}(undef, m)
+    # αα = Vector{Vector{T}}(undef, m)
+    # n_clusters = 5
+    k2 = Clustering.kmeans(X, m)
+    perm_idxs  = assignments(k2)
+    scatter(X[1,:], X[2,:], marker_z=k2.assignments, color=:lightrainbow, legend=false) |> display
+    # perm_idxs  = shuffle(1:n)
+    # blocksizes = make_blocks(n, m)
+
+    ŷ = Vector{T}(undef, n)
+
+    b_end = 0
+    for current_cluster in 1:m
+        cluster = perm_idxs .== current_cluster
+        n_new = size(X[:, cluster], 2)
+
+        b_start = b_end + 1
+        b_end  += n_new #blocksizes[i]
+
+        # i_idxs = perm_idxs[b_start:b_end]
+        
+        # i_krr  = fit(KRR, X[:, i_idxs], y[i_idxs], λ, ϕ)
+
+        # n_new = size(X[:, i_idxs], 2)
+       
+        # K = KernelFunctions.kernelmatrix!(Matrix{T}(undef, n_new, n_new), ϕ, X[:, i_idxs], obsdim=2)
+        K = KernelFunctions.kernelmatrix!(Matrix{T}(undef, n_new, n_new), ϕ, X[:, cluster], obsdim=2)
+    
+        for j = 1:n_new
+            # the n is important to make things comparable between fast and normal
+            # KRR
+            @inbounds K[j, j] += n_new * λ
+        end
+    
+        α = cholesky!(K) \ y[cluster]#y[i_idxs]
+    
+        # KRR(λ, X, α, ϕ)
+
+        # XX[i] = X[:, i_idxs]
+        # αα[i] = α
+        
+        # K * α = ŷ
+        ŷ[b_start:b_start + n_new - 1] = K' * α
     end
-    return view(y, fast_krr.I)
-    # return @inbounds view(vcat(map(i-> fast_krr.X[i]' .*  fast_krr.α[i], range(1, length = fast_krr.m))...), fast_krr.I)
+    # FastKRR(λ, m, perm_idxs, XX, αα, ϕ)
+    return unmerge_values(ŷ, perm_idxs, m) #view(ŷ, perm_idxs)
 end
 
 function showcompact(io::IO, x::FastKRR)
@@ -460,7 +535,7 @@ function predict(KRR::TruncatedNewtonKRR{T}, X::Matrix{T}) where {T <: AbstractF
     # k = MLKernels.kernelmatrix!(MLKernels.ColumnMajor(),
     #                             Matrix{T}(size(X, 2), size(KRR.X, 2)),
     #                             KRR.ϕ, X, KRR.X)
-    KernelFunctions.kernelmatrix!(Matrix{T}(undef, size(X, 2), size(KRR.X, 2)),
+    k = KernelFunctions.kernelmatrix!(Matrix{T}(undef, size(X, 2), size(KRR.X, 2)),
                                     KRR.ϕ, X, KRR.X, obsdim=2)
 k * KRR.α
 end
@@ -685,12 +760,59 @@ function fit(
 end
 
 function predict(KRR::NystromKRR{T}, X::Matrix{T}) where {T <: AbstractFloat}
-    # Knm = MLKernels.kernelmatrix!(MLKernels.ColumnMajor(),
-    #                               Matrix{T}(size(X, 2), size(KRR.X, 2)),
-    #                               KRR.ϕ, X, KRR.X)
     Knm = KernelFunctions.kernelmatrix!(Matrix{T}(undef, size(X, 2), size(KRR.X, 2)),
                                   KRR.ϕ, X, KRR.X, obsdim=2)
-Knm * KRR.α
+    Knm * KRR.α
+end 
+
+function fit_and_predict(
+    :: Type{NystromKRR},
+  X::Matrix{T},
+  y::Vector{T},
+  λ::T,
+  m::Integer,
+  ϕ::KernelFunctions.Kernel
+) where {T <: AbstractFloat}
+    d, n = size(X)
+    @assert m < n
+    m_idx = sample(1:n, m, replace=false)
+    Xm = X[:, m_idx]
+    Kmn = KernelFunctions.kernelmatrix!(Matrix{T}(undef, m, n),
+                                  ϕ, Xm, X, obsdim=2)
+
+    Kmm = Kmn[:, m_idx]
+
+    Kmm_e = eigen(Symmetric(Kmm)) 
+    # Keep only positive eigenvalues
+    Kmme_ind = Kmm_e.values .> 1e-1
+    Λm = Kmm_e.values[Kmme_ind]
+    Um = Kmm_e.vectors[:, Kmme_ind]
+    # There is no need to sort the eigenvalues/vectors
+
+    # Uapprox and Λapprox
+    U = sqrt(m / n) * ((Kmn' * Um) * Diagonal(1 ./ Λm))
+    Λ = Diagonal((n / m) * Λm)
+
+    # Williams & Seeger (2001) formula 11:
+    α = (1 / λ) * (y - U * ((λ * I + Λ * (U' * U)) \ (Λ * (U' * y))))
+
+    # KRR = NystromKRR(λ, X, m, ϕ, α)
+
+    # Separate X
+    ŷ = Vector{T}(undef, n)
+    cont = 1
+    nblocks = 100
+    blocks = make_blocks(n, nblocks)
+    Knm = Matrix{T}(undef, blocks[1], size(X, 2))
+    @views for i in 1:nblocks
+        # TODO: Change Knm if blocks[i] not equal to Knm size 2
+        KernelFunctions.kernelmatrix!(Knm,
+            ϕ, X[:,cont:cont + blocks[i] - 1], X, obsdim=2)
+        ŷ[cont:cont+blocks[i]-1] = Knm * α
+        cont += blocks[i]
+        # ŷ[cont:cont+blocks[i]-1] = predict(KRR, X[:,cont:cont + blocks[i] - 1])
+    end
+    return ŷ
 end
 
 function showcompact(io::IO, x::NystromKRR)
@@ -751,8 +873,6 @@ struct SomethingKRR{T <: AbstractFloat} <: AbstractKRR{T}
         # SomethingKRR{T}(λ, X, r, m, ϕ, α, Σinv, Vt)
     end
 end
-
-
 
 function fit(
       :: Type{SomethingKRR},
