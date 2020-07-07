@@ -754,8 +754,26 @@ function fit_and_predict(
 ) where {T<:AbstractFloat}
     d, n = size(X)
     @assert m < n
-    m_idx = sample(1:n, m, replace = false)
-    Xm = view(X,:, m_idx)
+
+    nclusters = 5
+    # Pick m random values from the clusters
+    k2 = Clustering.kmeans(X, nclusters)
+    perm_idxs = assignments(k2)
+
+    # Generally m ≈ 100 is the number of items we are picking
+    # nclusters ≈ 5 so we should get 20 elems from each cluster for fitting
+    # TODO: Run Nystrom in each KMeans cluster
+    items = make_blocks(m, nclusters)
+    m_idx = zeros(Int64, m)
+    idx = 1
+    @views for current_cluster = 1:nclusters
+        cluster = perm_idxs .== current_cluster
+        n_new = sample((1:n)[cluster], items[current_cluster], replace = false)
+        m_idx[idx:idx+items[current_cluster]-1] = n_new
+        idx += items[current_cluster]
+    end
+
+    Xm = view(X, :, m_idx)
     Kmn = KernelFunctions.kernelmatrix!(
         Matrix{T}(undef, m, n),
         ϕ,
@@ -764,7 +782,7 @@ function fit_and_predict(
         obsdim = 2,
     )
 
-    Kmm = view(Kmn,:, m_idx)
+    Kmm = view(Kmn, :, m_idx)
 
     Kmm_e = eigen(Symmetric(Kmm))
     # Keep only positive eigenvalues
@@ -783,24 +801,30 @@ function fit_and_predict(
     # Separate X
     ŷ = Vector{T}(undef, n)
     cont = 1
-    nblocks = 100
-    blocks = make_blocks(n, nblocks)
-    Knm = Matrix{T}(undef, blocks[1], size(X, 2))
+    nblocks = nclusters
+    # blocks = make_blocks(n, nblocks)
+    # k2 = Clustering.kmeans(X, nclusters)
+    # perm_idxs = assignments(k2)
+
+    Knm = Matrix{T}(undef, first(wcounts(k2)), n)
     @views for i = 1:nblocks
-        if blocks[i] != size(Kmn, 1)
-            Knm = Matrix{T}(undef, blocks[i], size(X, 2))
+        cluster_size = wcounts(k2)[i]
+        if cluster_size != size(Kmn, 1)
+            Knm = Matrix{T}(undef, cluster_size, n)
         end
+        # Sample the X from the clusters
+        cluster = perm_idxs .== i
         KernelFunctions.kernelmatrix!(
             Knm,
             ϕ,
-            X[:, cont:cont+blocks[i]-1],
+            X[:, cluster],
             X,
             obsdim = 2,
         )
-        ŷ[cont:cont+blocks[i]-1] = Knm * α
-        cont += blocks[i]
+        ŷ[cont:cont+cluster_size-1] = Knm * α
+        cont += cluster_size
     end
-    return ŷ
+    return @views unmerge_values(ŷ, perm_idxs, nblocks)
 end
 
 function showcompact(io::IO, x::NystromKRR)

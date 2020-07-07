@@ -20,7 +20,6 @@ export KRR,
     fit, predict, fit_and_predict
 
 import Base: show, display # showcompact
-# import MLKernels
 import StatsBase
 import StatsBase: fit, fitted, predict, nobs, predict!, RegressionModel, sample, weights
 
